@@ -28,4 +28,7 @@ public class AppUser {
 
     @Column(name = "\"Role\"", nullable = false)
     private String role;
+
+    @Column(nullable = false)
+    private boolean enabled = false;
 }

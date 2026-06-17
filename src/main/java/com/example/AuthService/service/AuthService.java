@@ -1,28 +1,48 @@
 package com.example.AuthService.service;
-
-import com.example.AuthService.AuthServiceApplication;
+import com.example.AuthService.model.EmailOtp;
+import com.example.AuthService.repository.EmailOtpRepository;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import com.example.AuthService.dto.*;
 import com.example.AuthService.model.AppUser;
+import com.example.AuthService.model.RefreshToken;
+import com.example.AuthService.model.VerificationToken;
+import com.example.AuthService.repository.RefreshTokenRepository;
 import com.example.AuthService.repository.UserRepository;
+import com.example.AuthService.repository.VerificationTokenRepository;
 import com.example.AuthService.security.JwtService;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
+import java.util.UUID;
+
 @Service
-
 public class AuthService {
-
+    private final RefreshTokenRepository refreshTokenRepository;
+    private final EmailOtpRepository emailOtpRepository;
+    private final JavaMailSender mailSender;
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final RefreshTokenService refreshTokenService;
+    private final VerificationTokenRepository verificationTokenRepository;
+    public AuthService(
+            RefreshTokenRepository refreshTokenRepository, EmailOtpRepository emailOtpRepository, JavaMailSender mailSender, UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
+            JwtService jwtService,
+            RefreshTokenService refreshTokenService, VerificationTokenRepository verificationTokenRepository) {
+        this.refreshTokenRepository = refreshTokenRepository;
+        this.emailOtpRepository = emailOtpRepository;
+        this.mailSender = mailSender;
 
-    public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtService jwtService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.refreshTokenService = refreshTokenService;
+        this.verificationTokenRepository = verificationTokenRepository;
     }
 
     public AuthResponse register(RegisterRequest request) {
@@ -40,34 +60,73 @@ public class AuthService {
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .role("USER")
+                .enabled(false)
                 .build();
 
         userRepository.save(user);
 
-        return new AuthResponse("Register Success");
+        String otp = String.valueOf(
+                100000 + new java.util.Random().nextInt(900000)
+        );
+
+        EmailOtp emailOtp = EmailOtp.builder()
+                .email(user.getEmail())
+                .otp(otp)
+                .expiryTime(LocalDateTime.now().plusMinutes(5))
+                .build();
+
+        emailOtpRepository.save(emailOtp);
+
+        SimpleMailMessage message = new SimpleMailMessage();
+
+        message.setTo(user.getEmail());
+        message.setSubject("Email Verification");
+        message.setText(
+                "Hello " + user.getUsername()
+                        + "\n\nYour OTP Code is : "
+                        + otp
+                        + "\n\nThis code expires in 5 minutes."
+        );
+
+        mailSender.send(message);
+
+        return new AuthResponse(
+                "OTP sent to your email."
+        );
     }
 
+    public AuthResponse login(LoginRequest request) {
 
-    public AuthResponse Login(LoginRequest request) {
-        AppUser user = userRepository.findByUsername(request.getUsername())
+        AppUser user = userRepository
+                .findByUsername(request.getUsername())
                 .orElse(null);
 
-
-        if(user == null){
-            return new AuthResponse("User Not food");
+        if (user == null) {
+            return new AuthResponse("User Not Found");
         }
 
-        boolean valid  = passwordEncoder.matches((request.getPassword()),
-                user.getPasswordHash()
-                );
+        boolean valid = passwordEncoder.matches(
+                request.getPassword(),
+                user.getPasswordHash());
 
-        if(!valid)
-        {
-            return   new AuthResponse("Invalid password");
+        if (!valid) {
+            return new AuthResponse("Invalid Password");
         }
-        String Token = jwtService.generateToken(user.getUsername());
-        return new AuthResponse(Token);
+
+        String accessToken =
+                jwtService.generateToken(user.getUsername());
+
+        RefreshToken refreshToken =
+                refreshTokenService.createRefreshToken(
+                        user.getId());
+
+        return new AuthResponse(
+                accessToken,
+                refreshToken.getToken(),
+                "Login Success"
+        );
     }
+
     public String changePassword(ChangePasswordRequest request) {
 
         AppUser user = userRepository.findByUsername(request.getUsername())
@@ -92,6 +151,7 @@ public class AuthService {
 
         return "Password changed successfully";
     }
+
     public String resetPassword(String username, String newPassword) {
 
         AppUser user = userRepository.findByUsername(username)
@@ -110,7 +170,7 @@ public class AuthService {
 
     public String forgotPassword(ForgotPasswordRequest request) {
 
-        AppUser user = userRepository.findByEmail(request.getEmail())
+        userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() ->
                         new ResponseStatusException(
                                 HttpStatus.NOT_FOUND,
@@ -118,8 +178,84 @@ public class AuthService {
 
         return "Reset link sent to email";
     }
+    public AuthResponse refreshToken(
+            RefreshTokenRequest request) {
+
+        RefreshToken refreshToken =
+                refreshTokenRepository
+                        .findByToken(
+                                request.getRefreshToken())
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Refresh token not found"));
+
+        refreshTokenService
+                .verifyExpiration(refreshToken);
+
+        String accessToken =
+                jwtService.generateToken(
+                        refreshToken.getUser()
+                                .getUsername());
+
+        return new AuthResponse(
+                accessToken,
+                refreshToken.getToken(),
+                "Token Refreshed"
+        );
 
 
+
+    }
+    public String verifyEmail(String token) {
+
+        VerificationToken verificationToken =
+                verificationTokenRepository
+                        .findByToken(token)
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Invalid token"));
+
+        if (verificationToken.getExpiryDate()
+                .isBefore(LocalDateTime.now())) {
+
+            throw new RuntimeException(
+                    "Token expired");
+        }
+
+        AppUser user =
+                verificationToken.getUser();
+
+        user.setEnabled(true);
+
+        userRepository.save(user);
+
+        verificationTokenRepository
+                .delete(verificationToken);
+
+        return "Email verified successfully";
+    }
+    public String verifyOtp(String email, String otp) {
+
+        EmailOtp emailOtp =
+                emailOtpRepository.findByEmail(email)
+                        .orElseThrow(() ->
+                                new RuntimeException("OTP not found"));
+
+        if (!emailOtp.getOtp().equals(otp)) {
+            return "Invalid OTP";
+        }
+
+        AppUser user =
+                userRepository.findByEmail(email)
+                        .orElseThrow(() ->
+                                new RuntimeException("User not found"));
+
+        user.setEnabled(true);
+
+        userRepository.save(user);
+
+        emailOtpRepository.delete(emailOtp);
+
+        return "Email verified successfully";
+    }
 }
-
-

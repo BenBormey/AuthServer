@@ -24,13 +24,19 @@ public class SecurityConfig {
 
         http
                 .csrf(csrf -> csrf.disable())
+                .httpBasic(httpBasic -> httpBasic.disable())
+                .formLogin(form -> form.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/auth/login",
                                 "/api/auth/register",
-                                "/api/auth/change-password"
+                                "/api/auth/reset-password",
+                                "/api/auth/forgot-password",
+                                "/api/auth/refresh-token",
+                                "/api/auth/verify-otp"
                         ).permitAll()
-                        .anyRequest().authenticated()
+                        .anyRequest()
+                        .authenticated()
                 );
 
         return http.build();
