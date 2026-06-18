@@ -9,4 +9,10 @@ public interface EmailOtpRepository
         extends JpaRepository<EmailOtp, Long> {
 
     Optional<EmailOtp> findByEmail(String email);
+    Optional<EmailOtp> findByEmailAndOtp(
+            String email,
+            String otp
+    );
+
+    void deleteByEmail(String email);
 }

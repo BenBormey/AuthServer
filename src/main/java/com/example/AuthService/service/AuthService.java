@@ -1,15 +1,9 @@
 package com.example.AuthService.service;
-import com.example.AuthService.model.EmailOtp;
-import com.example.AuthService.repository.EmailOtpRepository;
+import com.example.AuthService.model.*;
+import com.example.AuthService.repository.*;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import com.example.AuthService.dto.*;
-import com.example.AuthService.model.AppUser;
-import com.example.AuthService.model.RefreshToken;
-import com.example.AuthService.model.VerificationToken;
-import com.example.AuthService.repository.RefreshTokenRepository;
-import com.example.AuthService.repository.UserRepository;
-import com.example.AuthService.repository.VerificationTokenRepository;
 import com.example.AuthService.security.JwtService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -17,6 +11,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -27,12 +23,13 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private  final RoleRepository roleRepository;
     private final RefreshTokenService refreshTokenService;
     private final VerificationTokenRepository verificationTokenRepository;
     public AuthService(
             RefreshTokenRepository refreshTokenRepository, EmailOtpRepository emailOtpRepository, JavaMailSender mailSender, UserRepository userRepository,
             PasswordEncoder passwordEncoder,
-            JwtService jwtService,
+            JwtService jwtService, RoleRepository roleRepository,
             RefreshTokenService refreshTokenService, VerificationTokenRepository verificationTokenRepository) {
         this.refreshTokenRepository = refreshTokenRepository;
         this.emailOtpRepository = emailOtpRepository;
@@ -41,6 +38,7 @@ public class AuthService {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.roleRepository = roleRepository;
         this.refreshTokenService = refreshTokenService;
         this.verificationTokenRepository = verificationTokenRepository;
     }
@@ -55,18 +53,22 @@ public class AuthService {
             return new AuthResponse("Email already exists");
         }
 
+        Role role = roleRepository.findByName(request.getRole())
+                .orElseThrow(() ->
+                        new RuntimeException("Role not found"));
+
         AppUser user = AppUser.builder()
                 .username(request.getUsername())
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
-                .role("USER")
                 .enabled(false)
+                .roles(Set.of(role))
                 .build();
 
         userRepository.save(user);
 
         String otp = String.valueOf(
-                100000 + new java.util.Random().nextInt(900000)
+                100000 + new Random().nextInt(900000)
         );
 
         EmailOtp emailOtp = EmailOtp.builder()
@@ -88,13 +90,13 @@ public class AuthService {
                         + "\n\nThis code expires in 5 minutes."
         );
 
+
+
+
         mailSender.send(message);
 
-        return new AuthResponse(
-                "OTP sent to your email."
-        );
+        return new AuthResponse("OTP sent to your email.");
     }
-
     public AuthResponse login(LoginRequest request) {
 
         AppUser user = userRepository
@@ -105,20 +107,29 @@ public class AuthService {
             return new AuthResponse("User Not Found");
         }
 
+        if (!user.isEnabled()) {
+            return new AuthResponse(
+                    "Please verify your email first");
+        }
+
         boolean valid = passwordEncoder.matches(
                 request.getPassword(),
-                user.getPasswordHash());
+                user.getPasswordHash()
+        );
 
         if (!valid) {
-            return new AuthResponse("Invalid Password");
+            return new AuthResponse(
+                    "Invalid Password");
         }
 
         String accessToken =
-                jwtService.generateToken(user.getUsername());
+                jwtService.generateToken(user);
 
         RefreshToken refreshToken =
-                refreshTokenService.createRefreshToken(
-                        user.getId());
+                refreshTokenService
+                        .createRefreshToken(
+                                user.getId()
+                        );
 
         return new AuthResponse(
                 accessToken,
@@ -178,6 +189,8 @@ public class AuthService {
 
         return "Reset link sent to email";
     }
+
+
     public AuthResponse refreshToken(
             RefreshTokenRequest request) {
 
@@ -195,16 +208,13 @@ public class AuthService {
         String accessToken =
                 jwtService.generateToken(
                         refreshToken.getUser()
-                                .getUsername());
+                );
 
         return new AuthResponse(
                 accessToken,
                 refreshToken.getToken(),
                 "Token Refreshed"
         );
-
-
-
     }
     public String verifyEmail(String token) {
 
