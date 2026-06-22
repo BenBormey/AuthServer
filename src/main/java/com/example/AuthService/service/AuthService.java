@@ -268,4 +268,37 @@ public class AuthService {
 
         return "Email verified successfully";
     }
+
+    public AuthResponse createUser(RegisterRequest request) {
+
+        if (userRepository.existsByUsername(request.getUsername())) {
+            throw new RuntimeException("Username already exists");
+        }
+
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new RuntimeException("Email already exists");
+        }
+
+        Role role = roleRepository.findByName(request.getRole())
+                .orElseThrow(() -> new RuntimeException("Role not found"));
+
+        AppUser user = new AppUser();
+        user.setUsername(request.getUsername());
+        user.setEmail(request.getEmail());
+        user.setPasswordHash(
+                passwordEncoder.encode(request.getPassword())
+        );
+
+        // Assign Role
+        user.setRoles(Set.of(role));
+
+        user.setEnabled(true);
+
+        userRepository.save(user);
+
+        AuthResponse response = new AuthResponse();
+        response.setMessage("User created successfully");
+
+        return response;
+    }
 }
